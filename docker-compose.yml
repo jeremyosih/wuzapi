@@ -1,49 +1,73 @@
+version: "3.9"
+
 services:
+  # Optional helper to avoid permission issues on mounted volumes (UID 1000)
+  change-vol-ownership:
+    image: ubuntu
+    user: root
+    restart: "no"
+    exclude_from_hc: true
+    volumes:
+      - "wuzapi-dbdata:/tmp/wuzapi-dbdata"
+      - "wuzapi-files:/tmp/wuzapi-files"
+    command: >
+      bash -c "chown -R 1000:1000 /tmp/wuzapi-dbdata &&
+               chown -R 1000:1000 /tmp/wuzapi-files &&
+               echo 'Volume ownership changed successfully'"
+
   wuzapi-server:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
+    # Coolify/Traefik will route to this internal port; set HTTP Port=8080 in the Coolify UI
+    expose:
+      - "8080"
+    volumes:
+      - "wuzapi-dbdata:/app/dbdata"
+      - "wuzapi-files:/app/files"
     environment:
-      - WUZAPI_ADMIN_TOKEN=H4Zbhw72PBKdTIgS
-      - DB_USER=wuzapi
-      - DB_PASSWORD=wuzapi
-      - DB_NAME=wuzapi
+      - SERVICE_FQDN_WUZAPI_SERVER_8080
+      - WUZAPI_ADMIN_TOKEN=$SERVICE_BASE64_32_SECRET
+      - DB_USER=${DB_USER:-wuzapi}
+      - DB_PASSWORD=$SERVICE_PASSWORD_POSTGRES
+      - DB_NAME=${DB_NAME:-wuzapi}
       - DB_HOST=db
       - DB_PORT=5432
-      - TZ=America/Sao_Paulo
-      - WEBHOOK_FORMAT=json
-      - SESSION_DEVICE_NAME=WuzAPI
+      - TZ=${TZ:-America/Sao_Paulo}
+      - WEBHOOK_FORMAT=${WEBHOOK_FORMAT:-json}
+      - SESSION_DEVICE_NAME=${SESSION_DEVICE_NAME:-WuzAPI}
+      # Optional if your Dockerfile/app supports it:
+      # - DB_SSLMODE=${DB_SSLMODE:-disable}
     depends_on:
+      change-vol-ownership:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
-    networks:
-      - wuzapi-network
     restart: on-failure
+    healthcheck:
+      # If WuzAPI has a dedicated health path, replace "/" with it
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   db:
     image: postgres:16
-    environment:
-      POSTGRES_USER: wuzapi
-      POSTGRES_PASSWORD: wuzapi
-      POSTGRES_DB: wuzapi
-    ports:
-      - "5432:5432"
     volumes:
-      - db_data:/var/lib/postgresql/data
-    networks:
-      - wuzapi-network
+      - "db-data:/var/lib/postgresql/data"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
+      - POSTGRES_DB=${DB_NAME:-wuzapi}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wuzapi"]
+      test: "pg_isready -U postgres -h localhost -d ${DB_NAME:-wuzapi}"
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: always
-      
-networks:
-  wuzapi-network:
-    driver: bridge
 
 volumes:
-  db_data:
+  db-data: {}
+  wuzapi-dbdata: {}
+  wuzapi-files: {}
