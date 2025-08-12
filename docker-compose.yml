@@ -1,73 +1,62 @@
 version: "3.9"
 
 services:
-  # Initialize volumes with correct permissions
   change-vol-ownership:
     image: ubuntu
     user: root
     restart: "no"
-    exclude_from_hc: true  # Coolify-specific: exclude from health checks
     volumes:
-      - "wuzapi-dbdata:/tmp/wuzapi-dbdata"
-      - "wuzapi-files:/tmp/wuzapi-files"
-    command: >
-      bash -c "chown -R 1000:1000 /tmp/wuzapi-dbdata &&
-               chown -R 1000:1000 /tmp/wuzapi-files &&
-               echo 'Volume ownership changed successfully'"
+      - wuzapi-dbdata:/tmp/wuzapi-dbdata
+      - wuzapi-files:/tmp/wuzapi-files
+    command: bash -lc "chown -R 1000:1000 /tmp/wuzapi-dbdata && chown -R 1000:1000 /tmp/wuzapi-files && echo ok"
 
-  # PostgreSQL Database
   db:
     image: postgres:16-alpine
     restart: always
     volumes:
-      - "postgres-data:/var/lib/postgresql/data"
+      - postgres-data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=wuzapi
-      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
-      - POSTGRES_DB=wuzapi
+      - POSTGRES_USER=${DB_USER:-wuzapi}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+      - POSTGRES_DB=${DB_NAME:-wuzapi}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wuzapi -d wuzapi"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-wuzapi} -d ${DB_NAME:-wuzapi}"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
 
-  # WuzAPI Server
   wuzapi-server:
     build:
       context: .
       dockerfile: Dockerfile
     restart: on-failure
     expose:
-      - "8080"  # Internal port for Coolify/Traefik routing
+      - "8080"
     volumes:
-      - "wuzapi-dbdata:/app/dbdata"
-      - "wuzapi-files:/app/files"
+      - wuzapi-dbdata:/app/dbdata
+      - wuzapi-files:/app/files
     environment:
-      # Coolify auto-generated FQDN
       - SERVICE_FQDN_WUZAPI_SERVER_8080
-      
-      # Database configuration
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=wuzapi
-      - DB_USER=wuzapi
-      - DB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
-      - DB_SSLMODE=disable
-      
-      # WuzAPI configuration
-      - WUZAPI_ADMIN_TOKEN=${SERVICE_BASE64_32_SECRET}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-wuzapi}
+      - DB_USER=${DB_USER:-wuzapi}
+      - DB_PASSWORD=${DB_PASSWORD:-changeme}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
+      - WUZAPI_ADMIN_TOKEN=${WUZAPI_ADMIN_TOKEN:-changeme}
       - SESSION_DEVICE_NAME=${SESSION_DEVICE_NAME:-WuzAPI}
       - TZ=${TZ:-America/Sao_Paulo}
       - WEBHOOK_FORMAT=${WEBHOOK_FORMAT:-json}
-      
+
     depends_on:
       change-vol-ownership:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8080 || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
