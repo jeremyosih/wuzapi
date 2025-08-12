@@ -1,12 +1,12 @@
 version: "3.9"
 
 services:
-  # Optional helper to avoid permission issues on mounted volumes (UID 1000)
+  # Initialize volumes with correct permissions
   change-vol-ownership:
     image: ubuntu
     user: root
     restart: "no"
-    exclude_from_hc: true
+    exclude_from_hc: true  # Coolify-specific: exclude from health checks
     volumes:
       - "wuzapi-dbdata:/tmp/wuzapi-dbdata"
       - "wuzapi-files:/tmp/wuzapi-files"
@@ -15,59 +15,65 @@ services:
                chown -R 1000:1000 /tmp/wuzapi-files &&
                echo 'Volume ownership changed successfully'"
 
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    restart: always
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+    environment:
+      - POSTGRES_USER=wuzapi
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=wuzapi
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wuzapi -d wuzapi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # WuzAPI Server
   wuzapi-server:
     build:
       context: .
       dockerfile: Dockerfile
-    # Coolify/Traefik will route to this internal port; set HTTP Port=8080 in the Coolify UI
+    restart: on-failure
     expose:
-      - "8080"
+      - "8080"  # Internal port for Coolify/Traefik routing
     volumes:
       - "wuzapi-dbdata:/app/dbdata"
       - "wuzapi-files:/app/files"
     environment:
+      # Coolify auto-generated FQDN
       - SERVICE_FQDN_WUZAPI_SERVER_8080
-      - WUZAPI_ADMIN_TOKEN=$SERVICE_BASE64_32_SECRET
-      - DB_USER=${DB_USER:-wuzapi}
-      - DB_PASSWORD=$SERVICE_PASSWORD_POSTGRES
-      - DB_NAME=${DB_NAME:-wuzapi}
+      
+      # Database configuration
       - DB_HOST=db
       - DB_PORT=5432
+      - DB_NAME=wuzapi
+      - DB_USER=wuzapi
+      - DB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - DB_SSLMODE=disable
+      
+      # WuzAPI configuration
+      - WUZAPI_ADMIN_TOKEN=${SERVICE_BASE64_32_SECRET}
+      - SESSION_DEVICE_NAME=${SESSION_DEVICE_NAME:-WuzAPI}
       - TZ=${TZ:-America/Sao_Paulo}
       - WEBHOOK_FORMAT=${WEBHOOK_FORMAT:-json}
-      - SESSION_DEVICE_NAME=${SESSION_DEVICE_NAME:-WuzAPI}
-      # Optional if your Dockerfile/app supports it:
-      # - DB_SSLMODE=${DB_SSLMODE:-disable}
+      
     depends_on:
       change-vol-ownership:
         condition: service_completed_successfully
       db:
         condition: service_healthy
-    restart: on-failure
     healthcheck:
-      # If WuzAPI has a dedicated health path, replace "/" with it
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 20s
-
-  db:
-    image: postgres:16
-    volumes:
-      - "db-data:/var/lib/postgresql/data"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
-      - POSTGRES_DB=${DB_NAME:-wuzapi}
-    healthcheck:
-      test: "pg_isready -U postgres -h localhost -d ${DB_NAME:-wuzapi}"
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: always
+      start_period: 30s
 
 volumes:
-  db-data: {}
+  postgres-data: {}
   wuzapi-dbdata: {}
   wuzapi-files: {}
